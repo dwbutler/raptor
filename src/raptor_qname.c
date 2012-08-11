@@ -630,3 +630,217 @@ raptor_qname_get_counted_value(raptor_qname* name, size_t* length_p)
     *length_p=name->value_length;
   return name->value;
 }
+
+
+/**
+ * raptor_prefixed_name_check_type:
+ * @RAPTOR_PREFIXED_NAME_CHECK_VARNAME: SPARQL Variable name.
+ * @RAPTOR_PREFIXED_NAME_CHECK_QNAME_PREFIX: SPARQL / Turtle QName prefix.
+ * @RAPTOR_PREFIXED_NAME_CHECK_QNAME_LOCAL: SPARQL / Turtle QName localname.
+ * @RAPTOR_PREFIXED_NAME_CHECK_BLANK: SPARQL / Turtle blank node name.
+ *
+ * Check prefixed names for SPARQL and Turtle
+ *
+*/
+typedef enum {
+  RAPTOR_PREFIXED_NAME_CHECK_VARNAME      = 0,
+  RAPTOR_PREFIXED_NAME_CHECK_QNAME_PREFIX = 1,
+  RAPTOR_PREFIXED_NAME_CHECK_QNAME_LOCAL  = 2,
+  RAPTOR_PREFIXED_NAME_CHECK_BLANK        = 3
+} raptor_prefixed_name_check_type;
+
+
+RAPTOR_API int raptor_prefixed_name_check(unsigned char *string, size_t length, raptor_prefixed_name_check_type check_type);
+
+
+/**
+ * raptor_prefixed_name_check_bitflags:
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST: '0'-'9' is allowed at start
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST: '-' is allowed in middle
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST: '.' is allowed in middle
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST: '_' is allowed at start
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON: ':' is allowed everywhere
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX: '%'[A-Fa-f0-9][A-Fa-f0-9] is allowed everywhere
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE: 
+ *
+ * INTERNAL - things to allow in a name
+ *
+ * See raptor_unicode_is_xml11_namestartchar() and
+ * raptor_unicode_is_xml11_namechar() for what XML allows but in
+ * summary:
+ *
+ *           SPARQL               XML 1.1
+ *           First Rest Last      First Rest Last=Rest
+ *  A-Za-z   Yes   Yes  Yes       Yes   Yes  
+ *  0-9      Both  Yes  Yes       No    Yes  
+ *  -        No    Both Both      No    Yes  
+ *  .        No    Both No        No    Yes  
+ *  _        Both  Yes  Yes       Yes   No
+ *  :        Both  Both Both      No    No   
+ *  %HH      Both  Both Both      No    No   
+ *  \X       Both  Both Both      No    No   
+ *  Uni+     No    Yes  Yes       No    No
+ *
+ * Where H is a hex digit and X is an escaped charater.
+ * Uni+ is U+00B7 | U+0300 to U+036F inclusive | U+203F to U+2040 inclusive
+ *
+ */
+typedef enum {
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST   = 1,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST = 2,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST   = 4,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST   = 8,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON      = 16,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX        = 32,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE = 64
+} raptor_prefixed_name_check_bitflags;
+
+
+/**
+ * raptor_prefixed_name_check:
+ * @string: name string
+ * @length: name length
+ * @check_type: check to make
+ *
+ * Check a UTF-8 encoded name string to match SPARQL or Turtle constraints
+ *
+ * Return value: <0 on error (such as invalid @check_type or empty string), 0 if invalid, >0 if valid
+ */
+int
+raptor_prefixed_name_check(unsigned char *string, size_t length,
+                           raptor_prefixed_name_check_type check_type)
+{
+  unsigned char *p = string;
+  int rc = 0;
+  raptor_prefixed_name_check_bitflags check_bits;
+  int pos;
+  raptor_unichar unichar = 0;
+  int unichar_len = 0;
+
+  if(check_type == RAPTOR_PREFIXED_NAME_CHECK_VARNAME)
+    check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST | 
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE;
+  else if(check_type == RAPTOR_PREFIXED_NAME_CHECK_QNAME_PREFIX)
+    check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE;
+  else if(check_type == RAPTOR_PREFIXED_NAME_CHECK_QNAME_LOCAL)
+    check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE;
+  else if(check_type == RAPTOR_PREFIXED_NAME_CHECK_BLANK)
+    check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE;
+  else
+    return -1;
+
+#if defined(RAPTOR_DEBUG) && RAPTOR_DEBUG > 2
+  RAPTOR_DEBUG1("Checking name '");
+  if(length)
+     fwrite(string, length, sizeof(unsigned char), stderr);
+  fprintf(stderr, "' (length %d), flags %d\n", 
+          RAPTOR_BAD_CAST(int, length), RAPTOR_GOOD_CAST(int, check_flags));
+#endif
+
+  if(!length)
+    return -1;
+
+  for(pos = 0, p = string;
+      length > 0; 
+      pos++, p += unichar_len, length -= unichar_len) {
+
+    unichar_len = raptor_unicode_utf8_string_get_char(p, length, &unichar);
+    if(unichar_len < 0 || RAPTOR_GOOD_CAST(size_t, unichar_len) > length)
+      goto done;
+
+    if(unichar > raptor_unicode_max_codepoint)
+      goto done;
+  
+    /* checks for anywhere in name */
+
+    /* This is NOT allowed by XML */
+    if(unichar == ':') {
+      if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON)
+        continue;
+      goto done;
+    }
+      
+    /* This is NOT allowed by XML */
+    if(unichar == '%') {
+      if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX)
+        continue;
+      goto done;
+    }
+
+    if(!pos) {
+      /* start of name */
+
+      /* This is NOT allowed by XML */
+      if(unichar >= '0' && unichar <= '9') {
+        if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST)
+          continue;
+        goto done;
+      }
+
+      /* This IS allowed by XML */
+      if(unichar == '_') {
+        if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST)
+          continue;
+        goto done;
+      }
+      
+      if(!raptor_unicode_is_xml11_namestartchar(unichar)) {
+        goto done;
+      }
+    } else {
+      /* rest of name */
+
+      /* This is NOT allowed by XML */
+      if(unichar == 0x00B7 || 
+         ( unichar >= 0x0300 && unichar <= 0x036F ) || 
+         ( unichar >= 0x203F && unichar <= 0x2040 )) {
+        if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE)
+          continue;
+        goto done;
+      }
+
+      /* This IS allowed by XML */
+      if(unichar == '.') {
+        if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST)
+          continue;
+        goto done;
+      }
+      
+      /* This IS allowed by XML */
+      if(unichar == '-') {
+        if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST)
+          continue;
+        goto done;
+      }
+
+      if(!raptor_unicode_is_xml11_namechar(unichar)) {
+        goto done;
+      }
+    }
+  }
+
+  /* Check final character */
+  if(unichar == '.') {
+    /* always not allowed */
+    goto done;
+  }
+
+  /* It is good */
+  rc = 1;
+
+  done:
+
+  return rc;
+}
