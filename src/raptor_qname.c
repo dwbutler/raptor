@@ -661,7 +661,8 @@ RAPTOR_API int raptor_prefixed_name_check(unsigned char *string, size_t length, 
  * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST: '_' is allowed at start
  * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON: ':' is allowed everywhere
  * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX: '%'[A-Fa-f0-9][A-Fa-f0-9] is allowed everywhere
- * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE: 
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE: Allow extra unicodes
+ * @RAPTOR_PREFIXED_NAME_CHECK_ALLOW_BS_ESCAPE: Allow \+certain chars
  *
  * INTERNAL - things to allow in a name
  *
@@ -671,19 +672,25 @@ RAPTOR_API int raptor_prefixed_name_check(unsigned char *string, size_t length, 
  *
  *           SPARQL               XML 1.1
  *           First Rest Last      First Rest Last=Rest
- *  A-Za-z   Yes   Yes  Yes       Yes   Yes  
- *  0-9      Both  Yes  Yes       No    Yes  
- *  -        No    Both Both      No    Yes  
- *  .        No    Both No        No    Yes  
+ *  A-Za-z   Yes   Yes  Yes       Yes   Yes
+ *  0-9      Both  Yes  Yes       No    Yes
+ *  -        No    Both Both      No    Yes
+ *  .        No    Both No        No    Yes
  *  _        Both  Yes  Yes       Yes   No
- *  :        Both  Both Both      No    No   
- *  %HH      Both  Both Both      No    No   
- *  \X       Both  Both Both      No    No   
+ *  :        Both  Both Both      No    No
+ *  %HH      Both  Both Both      No    No
+ *  \X       Both  Both Both      No    No
  *  Uni+     No    Yes  Yes       No    No
  *
  * Where H is a hex digit and X is an escaped charater.
  * Uni+ is U+00B7 | U+0300 to U+036F inclusive | U+203F to U+2040 inclusive
  *
+ * Input is a sequence of characters taken from the set:
+ *   "A-Z0-9a-z-._:%\\\x80-\xff"
+ * where \ can be followed by one of the characters in the set:
+ *   "_~.-!$&'()*+,;=/?#@%"
+ * and % must be followed by two characters in the set:
+ *   "A-Fa-f0-9"
  */
 typedef enum {
   RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST   = 1,
@@ -692,7 +699,8 @@ typedef enum {
   RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST   = 8,
   RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON      = 16,
   RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX        = 32,
-  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE = 64
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE = 64,
+  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_BS_ESCAPE     = 128
 } raptor_prefixed_name_check_bitflags;
 
 
@@ -716,9 +724,10 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
   int pos;
   raptor_unichar unichar = 0;
   int unichar_len = 0;
+  int escape = 0;
 
   if(check_type == RAPTOR_PREFIXED_NAME_CHECK_VARNAME)
-    check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST | 
+    check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST |
                  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST |
                  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE;
   else if(check_type == RAPTOR_PREFIXED_NAME_CHECK_QNAME_PREFIX)
@@ -732,7 +741,8 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
                  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST |
                  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX |
                  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_COLON |
-                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE;
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE |
+                 RAPTOR_PREFIXED_NAME_CHECK_ALLOW_BS_ESCAPE;
   else if(check_type == RAPTOR_PREFIXED_NAME_CHECK_BLANK)
     check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_09_FIRST |
                  RAPTOR_PREFIXED_NAME_CHECK_ALLOW_DOT_REST |
@@ -745,7 +755,7 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
   RAPTOR_DEBUG1("Checking name '");
   if(length)
      fwrite(string, length, sizeof(unsigned char), stderr);
-  fprintf(stderr, "' (length %d), flags %d\n", 
+  fprintf(stderr, "' (length %d), flags %d\n",
           RAPTOR_BAD_CAST(int, length), RAPTOR_GOOD_CAST(int, check_flags));
 #endif
 
@@ -753,7 +763,7 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
     return -1;
 
   for(pos = 0, p = string;
-      length > 0; 
+      length > 0;
       pos++, p += unichar_len, length -= unichar_len) {
 
     unichar_len = raptor_unicode_utf8_string_get_char(p, length, &unichar);
@@ -762,8 +772,25 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
 
     if(unichar > raptor_unicode_max_codepoint)
       goto done;
-  
+
     /* checks for anywhere in name */
+
+    /* This is NOT allowed by XML */
+    if(escaping) {
+      escaping = 0;
+      if(unichar == '_' || unichar == '~' || unichar == '.' ||
+         unichar == '-' || unichar == '!' || unichar == '$' ||
+         unichar == '&' || unichar == '\'' || unichar == '(' ||
+         unichar == ')' || unichar == '*' || unichar == '+' ||
+         unichar == ',' || unichar == ';' || unichar == '=' ||
+         unichar == '/' || unichar == '?' || unichar == '#' ||
+         unichar == '@' || unichar == '%')
+        continue;
+      goto done;
+    }
+    escaping = (unichar == '\\');
+    if(escaping)
+      continue;
 
     /* This is NOT allowed by XML */
     if(unichar == ':') {
@@ -771,7 +798,7 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
         continue;
       goto done;
     }
-      
+
     /* This is NOT allowed by XML */
     if(unichar == '%') {
       if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_HEX)
@@ -795,7 +822,7 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
           continue;
         goto done;
       }
-      
+
       if(!raptor_unicode_is_xml11_namestartchar(unichar)) {
         goto done;
       }
@@ -803,8 +830,8 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
       /* rest of name */
 
       /* This is NOT allowed by XML */
-      if(unichar == 0x00B7 || 
-         ( unichar >= 0x0300 && unichar <= 0x036F ) || 
+      if(unichar == 0x00B7 ||
+         ( unichar >= 0x0300 && unichar <= 0x036F ) ||
          ( unichar >= 0x203F && unichar <= 0x2040 )) {
         if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_EXTRA_UNICODE)
           continue;
@@ -817,7 +844,7 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
           continue;
         goto done;
       }
-      
+
       /* This IS allowed by XML */
       if(unichar == '-') {
         if(check_bits & RAPTOR_PREFIXED_NAME_CHECK_ALLOW_MINUS_REST)
