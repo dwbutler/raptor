@@ -719,7 +719,7 @@ raptor_prefixed_name_check(unsigned char *string, size_t length,
   int pos;
   raptor_unichar unichar = 0;
   int unichar_len = 0;
-  int escape = 0;
+  int escaping = 0;
 
   if(check_type == RAPTOR_PREFIXED_NAME_CHECK_VARNAME)
     check_bits = RAPTOR_PREFIXED_NAME_CHECK_ALLOW_UL_FIRST |
